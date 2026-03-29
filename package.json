@@ -1,7 +1,7 @@
 {
   "name": "noo",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/metro-runtime": "55.0.8-canary-20260327-0789fbc",
     "expo": "55.0.10-canary-20260327-0789fbc",
     "expo-constants": "^55.0.10-canary-20260327-0789fbc",
     "expo-linking": "^55.0.10-canary-20260327-0789fbc",
@@ -16,9 +17,11 @@
     "expo-status-bar": "^55.0.5-canary-20260327-0789fbc",
     "firebase": "^12.11.0",
     "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.83.4",
     "react-native-safe-area-context": "^5.7.0",
-    "react-native-screens": "^4.24.0"
+    "react-native-screens": "^4.24.0",
+    "react-native-web": "~0.21.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",

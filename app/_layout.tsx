@@ -5,17 +5,10 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: "#6C63FF" },
-          headerTintColor: "#fff",
-          headerTitleStyle: { fontWeight: "bold" },
-        }}
-      >
-        <Stack.Screen name="index" options={{ title: "Noo" }} />
-        <Stack.Screen name="(auth)/login" options={{ title: "Connexion" }} />
-        <Stack.Screen name="(auth)/register" options={{ title: "Inscription" }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(tabs)" />
       </Stack>
     </>
   );

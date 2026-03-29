@@ -1,5 +1,5 @@
 // Mode démo : réponses prédéfinies (passer à true quand l'API Claude est configurée)
-const USE_CLOUD_FUNCTION = false;
+const USE_CLOUD_FUNCTION = true;
 
 import { getFunctions, httpsCallable } from "firebase/functions";
 import app from "../config/firebase";

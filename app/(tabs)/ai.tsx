@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { askClaude } from "../../src/services/ai";
 
 interface ChatMessage {
@@ -11,6 +12,7 @@ interface ChatMessage {
 }
 
 export default function AI() {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -59,6 +61,12 @@ export default function AI() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={90}
     >
+      <View style={{backgroundColor:"#2A7C6F",paddingTop:Platform.OS==="ios"?14:10,paddingBottom:18,paddingHorizontal:22,position:"relative",overflow:"hidden"}}>
+        <View style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:60,backgroundColor:"rgba(255,255,255,0.06)"}}/>
+        <TouchableOpacity onPress={() => router.push("/(tabs)/feed")} style={{marginBottom:8}}><Text style={{fontSize:14,color:"rgba(255,255,255,0.7)",fontWeight:"700"}}>← Accueil</Text></TouchableOpacity>
+        <Text style={{fontSize:26,fontWeight:"800",color:"#fff",fontStyle:"italic",marginBottom:4}}>Noo IA</Text>
+        <Text style={{fontSize:13,color:"rgba(255,255,255,0.6)"}}>Votre assistant familial</Text>
+      </View>
       <FlatList
         data={messages}
         keyExtractor={(item) => item.id}
@@ -72,7 +80,7 @@ export default function AI() {
 
       {loading && (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#6C63FF" />
+          <ActivityIndicator color="#2A7C6F" />
           <Text style={styles.loadingText}>Noo réfléchit...</Text>
         </View>
       )}
@@ -93,27 +101,27 @@ export default function AI() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F0EEFF" },
+  container: { flex: 1, backgroundColor: "#FBF7F2" },
   bubble: { maxWidth: "85%", padding: 14, borderRadius: 16, marginVertical: 4, marginHorizontal: 10 },
-  userBubble: { alignSelf: "flex-end", backgroundColor: "#6C63FF" },
-  aiBubble: { alignSelf: "flex-start", backgroundColor: "#fff", borderWidth: 1, borderColor: "#D8D4FF" },
-  aiLabel: { fontSize: 12, color: "#6C63FF", fontWeight: "700", marginBottom: 4 },
+  userBubble: { alignSelf: "flex-end", backgroundColor: "#2A7C6F" },
+  aiBubble: { alignSelf: "flex-start", backgroundColor: "#fff", borderWidth: 1, borderColor: "rgba(42,124,111,0.15)" },
+  aiLabel: { fontSize: 12, color: "#2A7C6F", fontWeight: "700", marginBottom: 4 },
   text: { fontSize: 15, color: "#333", lineHeight: 22 },
   userText: { color: "#fff" },
   loadingContainer: { flexDirection: "row", alignItems: "center", padding: 10, justifyContent: "center" },
-  loadingText: { color: "#6C63FF", marginLeft: 8, fontSize: 14 },
+  loadingText: { color: "#2A7C6F", marginLeft: 8, fontSize: 14 },
   inputBar: {
     flexDirection: "row",
     padding: 10,
     backgroundColor: "#fff",
     borderTopWidth: 1,
-    borderTopColor: "#E8E4FF",
+    borderTopColor: "rgba(107,78,61,0.08)",
     alignItems: "center",
   },
-  input: { flex: 1, backgroundColor: "#F0EEFF", padding: 12, borderRadius: 25, fontSize: 16 },
+  input: { flex: 1, backgroundColor: "#D0EDE9", padding: 12, borderRadius: 25, fontSize: 16 },
   sendButton: {
     marginLeft: 10,
-    backgroundColor: "#6C63FF",
+    backgroundColor: "#2A7C6F",
     width: 44,
     height: 44,
     borderRadius: 22,

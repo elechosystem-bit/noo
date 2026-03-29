@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../src/config/firebase";
@@ -9,73 +9,60 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert("Erreur", "Veuillez remplir tous les champs");
-      return;
-    }
+    setError("");
+    if (!email || !password) { setError("Veuillez remplir tous les champs"); return; }
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      router.replace("/(tabs)");
-    } catch (error: any) {
-      Alert.alert("Erreur", error.message);
-    } finally {
-      setLoading(false);
-    }
+      router.replace("/(tabs)/feed");
+    } catch (err: any) { setError(err.message || "Erreur"); }
+    finally { setLoading(false); }
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Bon retour ! 👋</Text>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <View style={styles.inner}>
+        <Text style={styles.emoji}>👋</Text>
+        <Text style={styles.title}>Bon retour</Text>
+        <Text style={styles.subtitle}>Retrouvez votre famille</Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Mot de passe"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
+        {error ? <View style={styles.errBox}><Text style={styles.errText}>{error}</Text></View> : null}
 
-      <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
-        <Text style={styles.buttonText}>{loading ? "Connexion..." : "Se connecter"}</Text>
-      </TouchableOpacity>
+        <Text style={styles.label}>EMAIL</Text>
+        <TextInput style={styles.input} placeholder="votre@email.com" placeholderTextColor="#B0978A" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
 
-      <TouchableOpacity onPress={() => router.push("/(auth)/register")}>
-        <Text style={styles.link}>Pas encore de compte ? S'inscrire</Text>
-      </TouchableOpacity>
-    </View>
+        <Text style={styles.label}>MOT DE PASSE</Text>
+        <TextInput style={styles.input} placeholder="Votre mot de passe" placeholderTextColor="#B0978A" value={password} onChangeText={setPassword} secureTextEntry />
+
+        <TouchableOpacity style={[styles.btn, loading && { opacity: 0.5 }]} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
+          <Text style={styles.btnText}>{loading ? "Connexion..." : "Se connecter"}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => router.push("/(auth)/register")} style={styles.linkRow}>
+          <Text style={styles.link}>Pas de compte ? </Text>
+          <Text style={styles.linkBold}>Creer un espace</Text>
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 30, backgroundColor: "#F8F9FA" },
-  title: { fontSize: 28, fontWeight: "bold", color: "#333", marginBottom: 30, textAlign: "center" },
-  input: {
-    backgroundColor: "#fff",
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 15,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-  },
-  button: {
-    backgroundColor: "#6C63FF",
-    padding: 15,
-    borderRadius: 30,
-    alignItems: "center",
-    marginTop: 10,
-  },
-  buttonText: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  link: { color: "#6C63FF", textAlign: "center", marginTop: 20, fontSize: 14 },
+  container: { flex: 1, backgroundColor: "#FBF7F2" },
+  inner: { flex: 1, justifyContent: "center", padding: 24 },
+  emoji: { fontSize: 48, textAlign: "center", marginBottom: 12 },
+  title: { fontSize: 28, fontWeight: "800", color: "#2C1F14", textAlign: "center", fontStyle: "italic" },
+  subtitle: { fontSize: 14, color: "#B0978A", textAlign: "center", marginBottom: 28 },
+  errBox: { backgroundColor: "#FFF5F0", borderRadius: 14, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: "#F5DDD0" },
+  errText: { color: "#C4503A", fontSize: 13, textAlign: "center" },
+  label: { fontSize: 11, fontWeight: "800", color: "#B0978A", letterSpacing: 1, marginBottom: 6, marginTop: 14 },
+  input: { backgroundColor: "#F5EFE6", padding: 16, borderRadius: 16, fontSize: 16, borderWidth: 2, borderColor: "transparent", color: "#2C1F14" },
+  btn: { backgroundColor: "#2A7C6F", padding: 18, borderRadius: 18, alignItems: "center", marginTop: 24, shadowColor: "rgba(42,124,111,0.35)", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 20, elevation: 6 },
+  btnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  linkRow: { flexDirection: "row", justifyContent: "center", marginTop: 20 },
+  link: { color: "#B0978A", fontSize: 14 },
+  linkBold: { color: "#2A7C6F", fontSize: 14, fontWeight: "800" },
 });

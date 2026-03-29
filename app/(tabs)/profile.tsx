@@ -23,11 +23,15 @@ export default function Profile() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{user?.displayName?.[0]?.toUpperCase() || "?"}</Text>
+      <View style={{backgroundColor:"#2A7C6F",paddingTop:14,paddingBottom:28,paddingHorizontal:22,alignItems:"center",position:"relative",overflow:"hidden"}}>
+        <View style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:60,backgroundColor:"rgba(255,255,255,0.06)"}}/>
+        <TouchableOpacity onPress={() => router.push("/(tabs)/feed")} style={{alignSelf:"flex-start",marginBottom:8}}><Text style={{fontSize:14,color:"rgba(255,255,255,0.7)",fontWeight:"700"}}>← Accueil</Text></TouchableOpacity>
+        <View style={[styles.avatar,{marginTop:0}]}>
+          <Text style={styles.avatarText}>{user?.displayName?.[0]?.toUpperCase() || "?"}</Text>
+        </View>
+        <Text style={[styles.name,{color:"#fff"}]}>{user?.displayName || "Utilisateur"}</Text>
+        <Text style={{fontSize:13,color:"rgba(255,255,255,0.6)"}}>{user?.email}</Text>
       </View>
-      <Text style={styles.name}>{user?.displayName || "Utilisateur"}</Text>
-      <Text style={styles.email}>{user?.email}</Text>
 
       <View style={styles.section}>
         <TouchableOpacity style={styles.menuItem}>
@@ -49,12 +53,12 @@ export default function Profile() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: "center", padding: 30, backgroundColor: "#F8F9FA" },
+  container: { flex: 1, alignItems: "center", padding: 30, backgroundColor: "#FBF7F2" },
   avatar: {
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: "#6C63FF",
+    backgroundColor: "#2A7C6F",
     justifyContent: "center",
     alignItems: "center",
     marginTop: 30,
