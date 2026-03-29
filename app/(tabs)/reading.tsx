@@ -1,858 +1,591 @@
 import { useState, useEffect } from "react";
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Modal,
-  TextInput,
-  Image,
-  Linking,
-  Platform,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Image, Linking, Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { type Book, type ReadingEntry } from "../../src/services/books";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import app, { db, auth } from "../../src/config/firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, collection, addDoc } from "firebase/firestore";
 import { useFamily } from "../../src/hooks/useFamily";
+import { askClaude } from "../../src/services/ai";
 
-interface ReadingPreference {
-  tag: string;
-  weight: number;
-}
+// ── Types ──────────────────────────────────────────────────────────────
+type AgeGroup = "child" | "teen" | "adult";
+type Tab = "discover" | "library" | "family";
 
-interface DiscoveryOption {
-  label: string;
-  emoji: string;
-  tags: string[];
-}
-
-interface DiscoveryQuestion {
+interface Q {
   id: string;
   question: string;
-  subtitle?: string;
   type: "choice" | "multi" | "text";
-  options?: DiscoveryOption[];
+  options?: string[];
 }
 
-interface PostReadingQuestion {
-  id: string;
-  question: string;
-  type: "choice" | "text";
-  options?: DiscoveryOption[];
-}
+// ── Questions par profil ───────────────────────────────────────────────
+const QUESTIONS: Record<AgeGroup, Q[]> = {
+  child: [
+    { id: "animals", question: "Tu aimes les histoires avec des animaux ?", type: "choice", options: ["Oui j'adore", "Bof", "Pas trop"] },
+    { id: "length", question: "Tu preferes les livres ?", type: "choice", options: ["Courts et rapides", "Moyens", "Les gros paves"] },
+    { id: "genre", question: "Ton type d'histoire prefere ?", type: "choice", options: ["Aventure", "Drole", "Magique", "Effrayant"] },
+    { id: "hero", question: "Ton heros prefere c'est plutot ?", type: "choice", options: ["Un enfant comme moi", "Un animal", "Un super-heros", "Un personnage magique"] },
+  ],
+  teen: [
+    { id: "fiction", question: "Tu preferes les histoires vraies ou inventees ?", type: "choice", options: ["Vraies", "Inventees", "Les deux"] },
+    { id: "surprise", question: "Le dernier livre qui t'a vraiment surpris ?", type: "text" },
+    { id: "why", question: "Tu lis plutot pour ?", type: "choice", options: ["Te detendre", "Penser", "Les deux", "Je sais pas trop"] },
+    { id: "dislike", question: "Ce que tu n'aimes pas dans un livre ?", type: "multi", options: ["Trop previsible", "Trop lent", "Trop de descriptions", "Trop triste", "Trop complique"] },
+    { id: "try", question: "Un genre que tu n'as jamais essaye mais qui te tente ?", type: "text" },
+  ],
+  adult: [
+    { id: "why", question: "Vous lisez plutot pour ?", type: "choice", options: ["Vous echapper", "Mieux comprendre le monde", "Les deux"] },
+    { id: "changed", question: "Un livre qui a change votre facon de voir les choses ?", type: "text" },
+    { id: "dislike", question: "Ce que vous ne supportez pas dans un roman ?", type: "multi", options: ["Les fins previsibles", "Les longueurs", "Les personnages superficiels", "Les happy ends trop faciles", "Le style trop simple"] },
+    { id: "try", question: "Un genre que vous n'avez jamais essaye mais qui vous tente ?", type: "text" },
+    { id: "abandon", question: "Vous preferez finir un livre decevant ou l'abandonner ?", type: "choice", options: ["Le finir", "L'abandonner sans culpabilite"] },
+  ],
+};
 
-const discoveryQuestions: DiscoveryQuestion[] = [
-  {
-    id: "mood",
-    question: "En ce moment, tu as plutôt envie de...",
-    subtitle: "Il n'y a pas de mauvaise réponse !",
-    type: "choice",
-    options: [
-      { label: "Rire et m'amuser", emoji: "😂", tags: ["humour", "aventure"] },
-      { label: "Voyager loin d'ici", emoji: "🌍", tags: ["voyage", "aventure", "fantasy"] },
-      { label: "Frissonner un peu", emoji: "😱", tags: ["suspense", "mystère"] },
-      { label: "Apprendre des choses", emoji: "🧠", tags: ["science", "documentaire"] },
-      { label: "Être ému(e)", emoji: "🥹", tags: ["émotion", "amitié", "famille"] },
-      { label: "Je ne sais pas trop", emoji: "🤷", tags: [] },
-    ],
-  },
-  {
-    id: "genre",
-    question: "Qu'est-ce qui t'attire le plus ?",
-    subtitle: "Tu peux en choisir plusieurs",
-    type: "multi",
-    options: [
-      { label: "Aventure & action", emoji: "⚔️", tags: ["aventure", "action"] },
-      { label: "Histoires vraies", emoji: "📰", tags: ["biographie"] },
-      { label: "Magie & fantastique", emoji: "🧙", tags: ["fantasy", "magie"] },
-      { label: "Animaux & nature", emoji: "🐾", tags: ["animaux", "nature"] },
-      { label: "Science & espace", emoji: "🚀", tags: ["science", "sf"] },
-      { label: "Amour & amitié", emoji: "💕", tags: ["romance", "amitié"] },
-      { label: "Enquêtes & mystères", emoji: "🔍", tags: ["policier", "mystère"] },
-      { label: "BD & manga", emoji: "💬", tags: ["bd", "manga"] },
-    ],
-  },
-  {
-    id: "length",
-    question: "Tu préfères les livres plutôt...",
-    type: "choice",
-    options: [
-      { label: "Courts — vite lus !", emoji: "📄", tags: ["court"] },
-      { label: "Moyens — le bon format", emoji: "📕", tags: ["moyen"] },
-      { label: "Longs — j'adore m'y plonger", emoji: "📚", tags: ["long"] },
-      { label: "Peu importe !", emoji: "🤷", tags: [] },
-    ],
-  },
-  {
-    id: "last_book",
-    question: "Le dernier livre que tu as vraiment aimé ?",
-    subtitle: "Même si c'était il y a longtemps. Si tu ne te souviens pas, passe !",
-    type: "text",
-  },
-  {
-    id: "dislike",
-    question: "Et à l'inverse, ce que tu n'aimes PAS dans un livre ?",
-    subtitle: "Ça nous aide à éviter les mauvaises surprises",
-    type: "multi",
-    options: [
-      { label: "Trop de descriptions", emoji: "😴", tags: ["pas-descriptif"] },
-      { label: "Trop triste", emoji: "😢", tags: ["pas-triste"] },
-      { label: "Trop compliqué", emoji: "🤯", tags: ["pas-complexe"] },
-      { label: "Trop enfantin", emoji: "👶", tags: ["pas-enfantin"] },
-      { label: "Pas assez d'action", emoji: "🐌", tags: ["pas-lent"] },
-      { label: "Tout me va !", emoji: "😊", tags: [] },
-    ],
-  },
-];
-
-function getPostReadingFlow(bookTitle: string): PostReadingQuestion[] {
+// Post-lecture par profil
+function getPostQuestions(ageGroup: AgeGroup, _bookTitle: string): Q[] {
+  if (ageGroup === "child") {
+    return []; // child uses AI-generated quiz
+  }
+  if (ageGroup === "teen") {
+    return [
+      { id: "best", question: "Ce que tu as prefere dans ce livre ?", type: "text" },
+      { id: "character", question: "Un personnage qui t'a marque et pourquoi ?", type: "text" },
+      { id: "recommend", question: "Tu le conseillerais a qui dans la famille ?", type: "text" },
+    ];
+  }
   return [
-    {
-      id: "feeling",
-      question: `Qu'est-ce que "${bookTitle}" t'a fait ressentir ?`,
-      type: "choice",
-      options: [
-        { label: "De la joie", emoji: "😊", tags: ["aime-humour"] },
-        { label: "De l'émotion", emoji: "🥹", tags: ["aime-émotion"] },
-        { label: "De l'excitation", emoji: "🤩", tags: ["aime-aventure"] },
-        { label: "De la curiosité", emoji: "🤔", tags: ["aime-réflexion"] },
-        { label: "De l'ennui", emoji: "😐", tags: ["pas-ce-genre"] },
-      ],
-    },
-    {
-      id: "best_part",
-      question: "Qu'est-ce que tu as préféré ?",
-      type: "choice",
-      options: [
-        { label: "Les personnages", emoji: "👤", tags: ["aime-personnages"] },
-        { label: "L'histoire", emoji: "📖", tags: ["aime-intrigue"] },
-        { label: "L'univers / le décor", emoji: "🌎", tags: ["aime-univers"] },
-        { label: "Le style d'écriture", emoji: "✍️", tags: ["aime-style"] },
-        { label: "La fin", emoji: "🎬", tags: ["aime-suspense"] },
-      ],
-    },
-    {
-      id: "similar",
-      question: "Tu aimerais relire quelque chose de similaire ?",
-      type: "choice",
-      options: [
-        { label: "Oui, encore !", emoji: "🔁", tags: ["plus-du-même"] },
-        { label: "Oui mais différent", emoji: "🔀", tags: ["varier"] },
-        { label: "Non, changer complètement", emoji: "🆕", tags: ["changer"] },
-      ],
-    },
-    {
-      id: "share",
-      question: "Tu le conseillerais à qui dans la famille ?",
-      type: "text",
-    },
+    { id: "changed", question: "Ce livre vous a-t-il change quelque chose ?", type: "text" },
+    { id: "recommend", question: "Vous le recommanderiez a un membre de la famille ? Lequel et pourquoi ?", type: "text" },
   ];
 }
 
-function buildPreferencesFromAnswers(answers: Record<string, string | string[]>): ReadingPreference[] {
-  const tagCounts: Record<string, number> = {};
-  for (const [questionId, answer] of Object.entries(answers)) {
-    const question = discoveryQuestions.find((q) => q.id === questionId);
-    if (!question?.options) continue;
-    const selectedLabels = Array.isArray(answer) ? answer : [answer];
-    for (const label of selectedLabels) {
-      const option = question.options.find((o) => o.label === label);
-      if (option) {
-        for (const tag of option.tags) {
-          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-        }
-      }
-    }
-  }
-  return Object.entries(tagCounts).map(([tag, count]) => ({ tag, weight: Math.min(count, 3) }));
+function detectAgeGroup(age?: number): AgeGroup {
+  if (!age || age >= 16) return "adult";
+  if (age >= 11) return "teen";
+  return "child";
 }
 
-type Tab = "discover" | "library" | "family";
-
+// ── Component ──────────────────────────────────────────────────────────
 export default function Reading() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<Tab>("discover");
-  const [library, setLibrary] = useState<ReadingEntry[]>([]);
-  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
-  const [preferences, setPreferences] = useState<ReadingPreference[]>([]);
-
-  // Discovery flow
-  const [profileComplete, setProfileComplete] = useState(false);
-  const [discoveryStep, setDiscoveryStep] = useState(0);
-  const [discoveryAnswers, setDiscoveryAnswers] = useState<Record<string, string | string[]>>({});
-  const [multiSelections, setMultiSelections] = useState<string[]>([]);
-  const [textAnswer, setTextAnswer] = useState("");
-
-  // AI recommendations
-  const [aiBooks, setAiBooks] = useState<Book[]>([]);
-  const [loadingBooks, setLoadingBooks] = useState(false);
-
-  // Finish reading flow
-  const [showFinishModal, setShowFinishModal] = useState(false);
-  const [finishingEntry, setFinishingEntry] = useState<ReadingEntry | null>(null);
-  const [postReadingStep, setPostReadingStep] = useState(0);
-  const [postReadingAnswers, setPostReadingAnswers] = useState<Record<string, string>>({});
-  const [postReadingText, setPostReadingText] = useState("");
-
-  const currentQuestion: DiscoveryQuestion | undefined = discoveryQuestions[discoveryStep];
   const { familyId } = useFamily();
   const userId = auth.currentUser?.uid;
 
-  // Load data from Firestore on mount
+  // Age detection
+  const [ageGroup, setAgeGroup] = useState<AgeGroup>("adult");
+  const [activeTab, setActiveTab] = useState<Tab>("discover");
+  const [library, setLibrary] = useState<ReadingEntry[]>([]);
+  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const [preferences, setPreferences] = useState<Record<string, string | string[]>>({});
+
+  // Discovery
+  const [profileComplete, setProfileComplete] = useState(false);
+  const [step, setStep] = useState(0);
+  const [multiSel, setMultiSel] = useState<string[]>([]);
+  const [textVal, setTextVal] = useState("");
+
+  // AI books
+  const [aiBooks, setAiBooks] = useState<Book[]>([]);
+  const [loadingBooks, setLoadingBooks] = useState(false);
+
+  // Post-reading
+  const [showFinish, setShowFinish] = useState(false);
+  const [finEntry, setFinEntry] = useState<ReadingEntry | null>(null);
+  const [postStep, setPostStep] = useState(0);
+  const [postAnswers, setPostAnswers] = useState<Record<string, string>>({});
+  const [postText, setPostText] = useState("");
+  // Child quiz
+  const [childQuiz, setChildQuiz] = useState<{ q: string; options: string[] }[]>([]);
+  const [childQuizAnswers, setChildQuizAnswers] = useState<string[]>([]);
+  const [loadingQuiz, setLoadingQuiz] = useState(false);
+
+  const questions = QUESTIONS[ageGroup];
+  const currentQ = questions[step];
+
+  // ── Load from Firestore ────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
-    const loadData = async () => {
+    (async () => {
       try {
-        const ref = doc(db, "users", userId, "reading", "profile");
+        const ref = doc(db, "users", userId, "readingProfile", "data");
         const snap = await getDoc(ref);
         if (snap.exists()) {
-          const data = snap.data();
-          if (data.profileComplete) setProfileComplete(true);
-          if (data.preferences) setPreferences(data.preferences);
-          if (data.library) {
-            setLibrary(data.library.map((e: any) => ({
+          const d = snap.data();
+          if (d.ageGroup) setAgeGroup(d.ageGroup);
+          if (d.profileComplete) setProfileComplete(true);
+          if (d.preferences) setPreferences(d.preferences);
+          if (d.library) {
+            setLibrary(d.library.map((e: any) => ({
               ...e,
-              startedAt: e.startedAt?.toDate ? e.startedAt.toDate() : e.startedAt ? new Date(e.startedAt) : undefined,
-              finishedAt: e.finishedAt?.toDate ? e.finishedAt.toDate() : e.finishedAt ? new Date(e.finishedAt) : undefined,
+              startedAt: e.startedAt ? new Date(e.startedAt) : undefined,
+              finishedAt: e.finishedAt ? new Date(e.finishedAt) : undefined,
             })));
           }
-          if (data.aiBooks && data.aiBooks.length > 0) setAiBooks(data.aiBooks);
+          if (d.aiBooks?.length > 0) setAiBooks(d.aiBooks);
         }
-      } catch (e) {
-        console.error("Error loading reading data:", e);
-      }
-    };
-    loadData();
-  }, [userId]);
+        // Try detect age from family members
+        if (familyId) {
+          const userDoc = await getDoc(doc(db, "users", userId));
+          if (userDoc.exists()) {
+            const age = userDoc.data().age;
+            if (age) setAgeGroup(detectAgeGroup(age));
+          }
+        }
+      } catch (e) { console.error(e); }
+    })();
+  }, [userId, familyId]);
 
-  // Save data to Firestore whenever it changes
-  const saveToFirestore = async (updates: Record<string, any>) => {
+  // ── Save to Firestore ──────────────────────────────────────────────
+  const save = async (updates: Record<string, any>) => {
     if (!userId) return;
     try {
-      const ref = doc(db, "users", userId, "reading", "profile");
-      await setDoc(ref, updates, { merge: true });
-    } catch (e) {
-      console.error("Error saving reading data:", e);
-    }
+      await setDoc(doc(db, "users", userId, "readingProfile", "data"), updates, { merge: true });
+    } catch (e) { console.error(e); }
   };
 
-  // Fetch AI recommendations via Cloud Function
-  const fetchAIRecommendations = async (prefs: ReadingPreference[]) => {
+  // ── AI Recommendations ────────────────────────────────────────────
+  const fetchRecos = async (prefs: Record<string, string | string[]>) => {
     setLoadingBooks(true);
     try {
       const functions = getFunctions(app, "europe-west1");
       const getBooks = httpsCallable(functions, "getBookRecommendations");
-      const prefTags = prefs.map((p) => p.tag);
+      const prefStr = Object.values(prefs).flat().filter(Boolean);
       const readTitles = library.filter((e) => e.status === "finished").map((e) => e.book.title);
-
-      const result = await getBooks({ preferences: prefTags, booksRead: readTitles });
+      const result = await getBooks({ preferences: prefStr, booksRead: readTitles });
       const data = result.data as { books: any[] };
-
-      if (data.books && data.books.length > 0) {
+      if (data.books?.length > 0) {
         const books: Book[] = data.books.map((b: any, i: number) => ({
-          id: "ai_" + Date.now() + "_" + i,
-          title: b.title || "",
-          author: b.author || "",
-          description: b.description || "",
-          ageRange: b.age || undefined,
-          genre: b.genre || undefined,
-          coverUrl: b.coverUrl || undefined,
+          id: "ai_" + Date.now() + "_" + i, title: b.title || "", author: b.author || "",
+          description: b.description || "", ageRange: b.age, genre: b.genre, coverUrl: b.coverUrl,
         }));
         setAiBooks(books);
-        saveToFirestore({ aiBooks: books });
+        save({ aiBooks: books });
       }
-    } catch (error) {
-      console.error("AI recommendation error:", error);
-    } finally {
-      setLoadingBooks(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setLoadingBooks(false); }
   };
 
-  const openAmazon = (book: Book) => {
-    const query = encodeURIComponent(book.title + " " + book.author);
-    // TODO: add affiliate tag when available (e.g. &tag=noo-app-21)
-    Linking.openURL("https://www.amazon.fr/s?k=" + query);
-  };
-
-  // === Discovery Flow ===
-  const handleDiscoveryChoice = (label: string) => {
-    const q = currentQuestion;
-    if (!q) return;
-
-    if (q.type === "multi") {
-      setMultiSelections((prev) =>
-        prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
-      );
+  // ── Discovery Flow ────────────────────────────────────────────────
+  const selectChoice = (label: string) => {
+    if (!currentQ) return;
+    if (currentQ.type === "multi") {
+      setMultiSel((p) => p.includes(label) ? p.filter((l) => l !== label) : [...p, label]);
       return;
     }
-
-    const newAnswers = { ...discoveryAnswers, [q.id]: label };
-    setDiscoveryAnswers(newAnswers);
-    goNextDiscovery(newAnswers);
+    const newPrefs = { ...preferences, [currentQ.id]: label };
+    setPreferences(newPrefs);
+    goNext(newPrefs);
   };
 
   const confirmMulti = () => {
-    const q = currentQuestion;
-    if (!q) return;
-    const newAnswers = { ...discoveryAnswers, [q.id]: multiSelections };
-    setDiscoveryAnswers(newAnswers);
-    setMultiSelections([]);
-    goNextDiscovery(newAnswers);
+    if (!currentQ) return;
+    const newPrefs = { ...preferences, [currentQ.id]: multiSel };
+    setPreferences(newPrefs);
+    setMultiSel([]);
+    goNext(newPrefs);
   };
 
   const confirmText = () => {
-    const q = currentQuestion;
-    if (!q) return;
-    const newAnswers = { ...discoveryAnswers, [q.id]: textAnswer };
-    setDiscoveryAnswers(newAnswers);
-    setTextAnswer("");
-    goNextDiscovery(newAnswers);
+    if (!currentQ) return;
+    const newPrefs = { ...preferences, [currentQ.id]: textVal };
+    setPreferences(newPrefs);
+    setTextVal("");
+    goNext(newPrefs);
   };
 
-  const goNextDiscovery = (answers: Record<string, string | string[]>) => {
-    if (discoveryStep < discoveryQuestions.length - 1) {
-      setDiscoveryStep((s) => s + 1);
+  const goNext = (prefs: Record<string, string | string[]>) => {
+    if (step < questions.length - 1) {
+      setStep((s) => s + 1);
     } else {
-      const prefs = buildPreferencesFromAnswers(answers);
-      setPreferences(prefs);
       setProfileComplete(true);
-      saveToFirestore({ profileComplete: true, preferences: prefs });
-      fetchAIRecommendations(prefs);
+      save({ ageGroup, profileComplete: true, preferences: prefs });
+      fetchRecos(prefs);
     }
   };
 
-  const skipDiscovery = () => {
+  const skip = () => {
     setProfileComplete(true);
-    saveToFirestore({ profileComplete: true, preferences: [] });
-    fetchAIRecommendations([]);
+    save({ ageGroup, profileComplete: true, preferences: {} });
+    fetchRecos({});
   };
 
-  // === Library ===
-  const addToLibrary = (book: Book, status: ReadingEntry["status"]) => {
+  // ── Library ───────────────────────────────────────────────────────
+  const addToLib = (book: Book, status: ReadingEntry["status"]) => {
     if (library.find((e) => e.book.id === book.id)) return;
-    const newEntry: ReadingEntry = {
-      id: `entry_${Date.now()}`,
-      book,
-      status,
-      startedAt: status === "reading" ? new Date() : undefined,
-    };
-    const newLib = [newEntry, ...library];
+    const entry: ReadingEntry = { id: `e_${Date.now()}`, book, status, startedAt: status === "reading" ? new Date() : undefined };
+    const newLib = [entry, ...library];
     setLibrary(newLib);
     setSelectedBook(null);
-    saveToFirestore({ library: newLib.map(e => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })) });
+    save({ library: newLib.map((e) => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })) });
   };
 
-  // === Post-reading flow ===
-  const startFinishFlow = (entry: ReadingEntry) => {
-    setFinishingEntry(entry);
-    setPostReadingStep(0);
-    setPostReadingAnswers({});
-    setShowFinishModal(true);
+  const startReading = (entry: ReadingEntry) => {
+    const newLib = library.map((e) => e.id === entry.id ? { ...e, status: "reading" as const, startedAt: new Date() } : e);
+    setLibrary(newLib);
+    save({ library: newLib.map((e) => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })) });
   };
 
-  const postReadingQuestions: PostReadingQuestion[] = finishingEntry
-    ? getPostReadingFlow(finishingEntry.book.title)
-    : [];
-  const currentPostQuestion = postReadingQuestions[postReadingStep];
+  // ── Post-reading ──────────────────────────────────────────────────
+  const startFinish = async (entry: ReadingEntry) => {
+    setFinEntry(entry);
+    setPostStep(0);
+    setPostAnswers({});
+    setPostText("");
+    setChildQuiz([]);
+    setChildQuizAnswers([]);
 
-  const handlePostReadingChoice = (label: string) => {
-    const q = currentPostQuestion;
-    if (!q || !finishingEntry) return;
-
-    const newAnswers = { ...postReadingAnswers, [q.id]: label };
-    setPostReadingAnswers(newAnswers);
-
-    if (postReadingStep < postReadingQuestions.length - 1) {
-      setPostReadingStep((s) => s + 1);
+    if (ageGroup === "child") {
+      // Generate quiz via AI
+      setLoadingQuiz(true);
+      setShowFinish(true);
+      try {
+        const resp = await askClaude(
+          `Genere 3 questions de comprehension QCM pour un enfant de 7-10 ans sur le livre "${entry.book.title}" de ${entry.book.author}. Format JSON: [{"q":"question","options":["choix1","choix2","choix3"]}]`,
+          "Quiz lecture enfant"
+        );
+        const match = resp.match(/\[[\s\S]*\]/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          setChildQuiz(parsed);
+        }
+      } catch (e) {
+        setChildQuiz([
+          { q: "Qui est le personnage principal ?", options: ["Je ne sais plus", "Un enfant", "Un animal"] },
+          { q: "L'histoire etait comment ?", options: ["Super !", "Bien", "Bof"] },
+          { q: "Tu le relirais ?", options: ["Oui !", "Peut-etre", "Non"] },
+        ]);
+      } finally { setLoadingQuiz(false); }
     } else {
-      completeReading(newAnswers);
+      setShowFinish(true);
     }
+  };
+
+  const postQuestions = finEntry ? getPostQuestions(ageGroup, finEntry.book.title) : [];
+  const currentPost = postQuestions[postStep];
+
+  const handlePostChoice = (label: string) => {
+    if (!currentPost || !finEntry) return;
+    const newA = { ...postAnswers, [currentPost.id]: label };
+    setPostAnswers(newA);
+    if (postStep < postQuestions.length - 1) setPostStep((s) => s + 1);
+    else finishReading(newA);
   };
 
   const submitPostText = () => {
-    const q = currentPostQuestion;
-    if (!q || !finishingEntry) return;
+    if (!currentPost || !finEntry) return;
+    const newA = { ...postAnswers, [currentPost.id]: postText };
+    setPostText("");
+    if (postStep < postQuestions.length - 1) { setPostAnswers(newA); setPostStep((s) => s + 1); }
+    else finishReading(newA);
+  };
 
-    const newAnswers = { ...postReadingAnswers, [q.id]: postReadingText };
-    setPostReadingText("");
-
-    if (postReadingStep < postReadingQuestions.length - 1) {
-      setPostReadingAnswers(newAnswers);
-      setPostReadingStep((s) => s + 1);
-    } else {
-      completeReading(newAnswers);
+  const handleChildQuizAnswer = (answer: string) => {
+    const newAnswers = [...childQuizAnswers, answer];
+    setChildQuizAnswers(newAnswers);
+    if (newAnswers.length >= childQuiz.length) {
+      // Save quiz to Firestore for parent
+      if (familyId && userId) {
+        addDoc(collection(db, "families", familyId, "readingQuiz"), {
+          childId: userId,
+          bookTitle: finEntry?.book.title,
+          bookAuthor: finEntry?.book.author,
+          quiz: childQuiz.map((q, i) => ({ question: q.q, answer: newAnswers[i] })),
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+      finishReading({});
     }
   };
 
-  const completeReading = (answers: Record<string, string>) => {
-    if (!finishingEntry) return;
-
-    const feeling = answers.feeling;
-    let rating: ReadingEntry["rating"] = "liked";
-    if (feeling === "De l'ennui") rating = "not_for_me";
-    else if (feeling === "De la joie" || feeling === "De l'excitation") rating = "loved";
-
+  const finishReading = (answers: Record<string, string>) => {
+    if (!finEntry) return;
     const newLib = library.map((e) =>
-      e.id === finishingEntry.id
-        ? { ...e, status: "finished" as const, rating, finishedAt: new Date(), notes: answers.share || "" }
-        : e
+      e.id === finEntry.id ? { ...e, status: "finished" as const, finishedAt: new Date(), rating: "liked" as const } : e
     );
     setLibrary(newLib);
-    saveToFirestore({ library: newLib.map(e => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })) });
+    save({
+      library: newLib.map((e) => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })),
+      postReadingAnswers: { ...(preferences as any).postReadingAnswers, [finEntry.book.title]: answers },
+    });
+    setShowFinish(false);
+    setFinEntry(null);
+  };
 
-    setShowFinishModal(false);
-    setFinishingEntry(null);
-    setPostReadingStep(0);
-    setPostReadingAnswers({});
+  const openAmazon = (book: Book) => {
+    Linking.openURL("https://www.amazon.fr/s?k=" + encodeURIComponent(book.title + " " + book.author));
   };
 
   const reading = library.filter((e) => e.status === "reading");
   const finished = library.filter((e) => e.status === "finished");
   const toRead = library.filter((e) => e.status === "to_read");
 
-  // === Renderers ===
-  const renderBookCard = (book: Book) => (
-    <TouchableOpacity key={book.id} style={styles.bookCard} onPress={() => setSelectedBook(book)}>
-      {book.coverUrl ? (
-        <Image source={{ uri: book.coverUrl }} style={styles.bookCoverImage} />
-      ) : (
-        <View style={styles.bookCover}>
-          <Text style={styles.bookEmoji}>📖</Text>
-        </View>
-      )}
-      <View style={styles.bookInfo}>
-        <Text style={styles.bookTitle}>{book.title}</Text>
-        <Text style={styles.bookAuthor}>{book.author}</Text>
-        <Text style={styles.bookDesc} numberOfLines={2}>{book.description}</Text>
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6, gap: 8 }}>
-          {book.ageRange ? (
-            <View style={styles.ageBadge}>
-              <Text style={styles.ageBadgeText}>{book.ageRange}</Text>
-            </View>
-          ) : null}
-          <TouchableOpacity
-            style={styles.buyButton}
-            onPress={(e) => { e.stopPropagation(); openAmazon(book); }}
-          >
-            <Text style={styles.buyButtonText}>Se le procurer</Text>
-          </TouchableOpacity>
+  // ── Render helpers ────────────────────────────────────────────────
+  const OptionCard = ({ label, selected, onPress, showEmoji }: { label: string; selected?: boolean; onPress: () => void; showEmoji?: boolean }) => (
+    <TouchableOpacity style={[S.opt, selected && S.optSel]} onPress={onPress} activeOpacity={0.8}>
+      {showEmoji && ageGroup === "child" ? (
+        <View style={S.optIcon}><Text style={{ fontSize: 20 }}>{label === "Oui j'adore" ? "😍" : label === "Bof" ? "😐" : label === "Pas trop" ? "😕" : "📖"}</Text></View>
+      ) : null}
+      <Text style={[S.optText, selected && S.optTextSel]}>{label}</Text>
+      {selected ? <View style={S.optCheck}><Text style={S.optCheckText}>✓</Text></View> : null}
+    </TouchableOpacity>
+  );
+
+  const BookCard = ({ book }: { book: Book }) => (
+    <TouchableOpacity style={S.book} onPress={() => setSelectedBook(book)} activeOpacity={0.85}>
+      {book.coverUrl ? <Image source={{ uri: book.coverUrl }} style={S.bookImg} /> : <View style={S.bookPlaceholder}><Text style={{ fontSize: 28 }}>📖</Text></View>}
+      <View style={S.bookInfo}>
+        <Text style={S.bookTitle}>{book.title}</Text>
+        <Text style={S.bookAuthor}>{book.author}</Text>
+        <Text style={S.bookDesc} numberOfLines={2}>{book.description}</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 6, alignItems: "center" }}>
+          {book.ageRange ? <View style={S.badge}><Text style={S.badgeText}>{book.ageRange}</Text></View> : null}
+          <TouchableOpacity style={S.buyBtn} onPress={() => openAmazon(book)}><Text style={S.buyText}>Se le procurer</Text></TouchableOpacity>
         </View>
       </View>
     </TouchableOpacity>
   );
 
-  const renderLibraryEntry = (entry: ReadingEntry) => (
-    <View key={entry.id} style={styles.bookCard}>
-      <View style={styles.bookCover}>
-        <Text style={styles.bookEmoji}>
-          {entry.status === "finished" ? "✅" : entry.status === "reading" ? "📖" : "📚"}
-        </Text>
-      </View>
-      <View style={styles.bookInfo}>
-        <Text style={styles.bookTitle}>{entry.book.title}</Text>
-        <Text style={styles.bookAuthor}>{entry.book.author}</Text>
-        {entry.rating && (
-          <Text style={styles.ratingText}>
-            {entry.rating === "loved" ? "❤️ Adoré" : entry.rating === "liked" ? "👍 Aimé" : "😐 Pas pour moi"}
-          </Text>
-        )}
-        {entry.status === "reading" && (
-          <TouchableOpacity style={styles.finishButton} onPress={() => startFinishFlow(entry)}>
-            <Text style={styles.finishButtonText}>J'ai terminé !</Text>
-          </TouchableOpacity>
-        )}
-        {entry.status === "to_read" && (
-          <TouchableOpacity
-            style={styles.startButton}
-            onPress={() => {
-              const newLib = library.map((e) =>
-                e.id === entry.id ? { ...e, status: "reading" as const, startedAt: new Date() } : e
-              );
-              setLibrary(newLib);
-              saveToFirestore({ library: newLib.map(e => ({ ...e, startedAt: e.startedAt?.toISOString(), finishedAt: e.finishedAt?.toISOString() })) });
-            }}
-          >
-            <Text style={styles.startButtonText}>Commencer</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-  );
-
+  // ── RENDER ────────────────────────────────────────────────────────
   return (
-    <View style={styles.container}>
-      {/* Hero header like home */}
-      <View style={styles.hero}>
-        <View style={styles.heroCircle1} />
-        <View style={styles.heroCircle2} />
-        <TouchableOpacity onPress={() => router.push("/(tabs)/feed")} style={{ marginBottom: 8 }}>
-          <Text style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", fontWeight: "700" }}>← Accueil</Text>
-        </TouchableOpacity>
-        <Text style={styles.heroTitle}>Lecture</Text>
-        <Text style={styles.heroSub}>Decouvrir, lire et partager en famille</Text>
-        {/* Pill tabs inside hero */}
-        <View style={styles.pillRow}>
-          {[
-            { key: "discover" as Tab, label: "Decouvrir" },
-            { key: "library" as Tab, label: "Ma biblio" },
-            { key: "family" as Tab, label: "En famille" },
-          ].map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.pill, activeTab === tab.key && styles.pillOn]}
-              onPress={() => setActiveTab(tab.key)}
-            >
-              <Text style={[styles.pillText, activeTab === tab.key && styles.pillTextOn]}>
-                {tab.label}
-              </Text>
+    <View style={S.container}>
+      {/* Hero */}
+      <View style={S.hero}>
+        <View style={S.c1} /><View style={S.c2} />
+        <Text style={S.heroTitle}>Lecture</Text>
+        <Text style={S.heroSub}>Decouvrir, lire et partager en famille</Text>
+        <View style={S.pills}>
+          {([["discover", "Decouvrir"], ["library", "Ma biblio"], ["family", "En famille"]] as [Tab, string][]).map(([k, l]) => (
+            <TouchableOpacity key={k} style={[S.pill, activeTab === k && S.pillOn]} onPress={() => setActiveTab(k)}>
+              <Text style={[S.pillT, activeTab === k && S.pillTOn]}>{l}</Text>
             </TouchableOpacity>
           ))}
         </View>
       </View>
 
-      {/* ===== DISCOVER TAB - QUESTIONNAIRE ===== */}
+      {/* ═══ DISCOVER - QUESTIONNAIRE ═══ */}
       {activeTab === "discover" && !profileComplete ? (
-        <ScrollView style={styles.content}>
-          <View style={{ alignItems: "center", paddingBottom: 40 }}>
-            <View style={styles.discoveryProgress}>
-              {discoveryQuestions.map((_, i) => (
-                <View key={i} style={[styles.progressDot, i <= discoveryStep && styles.progressDotActive]} />
+        <ScrollView style={S.scroll} contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: "center" }}>
+          <View style={S.dots}>
+            {questions.map((_, i) => <View key={i} style={[S.dot, i <= step && S.dotOn]} />)}
+          </View>
+          <Text style={S.greeting}>
+            {step === 0 ? (ageGroup === "child" ? "Dis-nous ce que tu aimes !" : ageGroup === "teen" ? "Apprenons a te connaitre" : "Apprenons a vous connaitre")
+              : "Question " + (step + 1) + " sur " + questions.length}
+          </Text>
+
+          {currentQ ? (
+            <View style={S.qCard}>
+              <Text style={S.qText}>{currentQ.question}</Text>
+
+              {currentQ.type === "choice" && currentQ.options?.map((o) => (
+                <OptionCard key={o} label={o} onPress={() => selectChoice(o)} showEmoji={ageGroup === "child"} />
               ))}
-            </View>
 
-            <Text style={styles.discoveryGreeting}>
-              {discoveryStep === 0
-                ? "Apprenons a vous connaitre !"
-                : "Question " + (discoveryStep + 1) + " sur " + discoveryQuestions.length}
-            </Text>
-
-            {currentQuestion ? (
-              <View style={styles.questionCard}>
-                <Text style={styles.questionText}>{currentQuestion.question}</Text>
-                {currentQuestion.subtitle ? (
-                  <Text style={styles.questionSubtitle}>{currentQuestion.subtitle}</Text>
-                ) : null}
-
-                {currentQuestion.type === "choice" && currentQuestion.options ? currentQuestion.options.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.label}
-                    style={styles.optionButton}
-                    onPress={() => handleDiscoveryChoice(opt.label)}
-                  >
-                    <Text style={styles.optionEmoji}>{opt.emoji}</Text>
-                    <Text style={styles.optionLabel}>{opt.label}</Text>
+              {currentQ.type === "multi" && currentQ.options ? (
+                <View>
+                  {currentQ.options.map((o) => (
+                    <OptionCard key={o} label={o} selected={multiSel.includes(o)} onPress={() => selectChoice(o)} />
+                  ))}
+                  <TouchableOpacity style={[S.btn, multiSel.length === 0 && S.btnOff]} onPress={confirmMulti} disabled={multiSel.length === 0}>
+                    <Text style={S.btnText}>Valider ({multiSel.length})</Text>
                   </TouchableOpacity>
-                )) : null}
+                </View>
+              ) : null}
 
-                {currentQuestion.type === "multi" && currentQuestion.options ? (
-                  <View>
-                    {currentQuestion.options.map((opt) => (
-                      <TouchableOpacity
-                        key={opt.label}
-                        style={[
-                          styles.optionButton,
-                          multiSelections.includes(opt.label) && styles.optionSelected,
-                        ]}
-                        onPress={() => handleDiscoveryChoice(opt.label)}
-                      >
-                        <Text style={styles.optionEmoji}>{opt.emoji}</Text>
-                        <Text style={[
-                          styles.optionLabel,
-                          multiSelections.includes(opt.label) && styles.optionLabelSelected,
-                        ]}>{opt.label}</Text>
-                        {multiSelections.includes(opt.label) ? <Text style={styles.checkMark}>v</Text> : null}
-                      </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity
-                      style={[styles.confirmButton, multiSelections.length === 0 && styles.confirmDisabled]}
-                      onPress={confirmMulti}
-                      disabled={multiSelections.length === 0}
-                    >
-                      <Text style={styles.confirmText}>
-                        {"Valider (" + multiSelections.length + " choix)"}
-                      </Text>
+              {currentQ.type === "text" ? (
+                <View>
+                  <TextInput style={S.inp} placeholder="Tapez ici..." placeholderTextColor="#B0978A" value={textVal} onChangeText={setTextVal} multiline />
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 12 }}>
+                    <TouchableOpacity onPress={() => { setTextVal(""); goNext(preferences); }} style={{ padding: 14 }}>
+                      <Text style={{ color: "#B0978A", fontSize: 15 }}>Passer</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[S.btn, { flex: 0, paddingHorizontal: 30 }, !textVal.trim() && S.btnOff]} onPress={confirmText} disabled={!textVal.trim()}>
+                      <Text style={S.btnText}>Suivant</Text>
                     </TouchableOpacity>
                   </View>
-                ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
-                {currentQuestion.type === "text" ? (
-                  <View>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="Tapez ici..."
-                      value={textAnswer}
-                      onChangeText={setTextAnswer}
-                      multiline
-                    />
-                    <View style={styles.textActions}>
-                      <TouchableOpacity style={styles.skipButton} onPress={() => {
-                        setTextAnswer("");
-                        goNextDiscovery(discoveryAnswers);
-                      }}>
-                        <Text style={styles.skipText}>Passer</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.confirmButton, !textAnswer.trim() && styles.confirmDisabled]}
-                        onPress={confirmText}
-                        disabled={!textAnswer.trim()}
-                      >
-                        <Text style={styles.confirmText}>Suivant</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-            ) : null}
-
-            <TouchableOpacity style={styles.skipAllButton} onPress={skipDiscovery}>
-              <Text style={styles.skipAllText}>Passer et voir les recommandations</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={skip} style={{ marginTop: 20, padding: 12 }}>
+            <Text style={{ color: "#B0978A", fontSize: 14, textDecorationLine: "underline" }}>Passer et voir les recommandations</Text>
+          </TouchableOpacity>
         </ScrollView>
       ) : null}
 
+      {/* ═══ DISCOVER - BOOKS ═══ */}
       {activeTab === "discover" && profileComplete ? (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {/* Preferences summary */}
-          {preferences.length > 0 && (
-            <View style={styles.prefsCard}>
-              <Text style={styles.prefsTitle}>🎯 Votre profil lecture</Text>
-              <View style={styles.prefsTags}>
-                {preferences.map((p) => (
-                  <View key={p.tag} style={styles.prefTag}>
-                    <Text style={styles.prefTagText}>{p.tag}</Text>
-                  </View>
+        <ScrollView style={S.scroll} contentContainerStyle={{ padding: 18, paddingBottom: 30 }}>
+          {Object.keys(preferences).length > 0 ? (
+            <View style={S.prefsCard}>
+              <Text style={S.prefsTitle}>Votre profil lecture</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
+                {Object.values(preferences).flat().filter(Boolean).map((t, i) => (
+                  <View key={i} style={S.prefTag}><Text style={S.prefTagT}>{String(t)}</Text></View>
                 ))}
               </View>
-              <TouchableOpacity onPress={() => { setProfileComplete(false); setDiscoveryStep(0); setDiscoveryAnswers({}); }}>
-                <Text style={styles.reDoText}>Refaire le questionnaire</Text>
+              <TouchableOpacity onPress={() => { setProfileComplete(false); setStep(0); setPreferences({}); }}>
+                <Text style={{ color: "#B0978A", fontSize: 13, marginTop: 10, textDecorationLine: "underline" }}>Refaire le questionnaire</Text>
               </TouchableOpacity>
             </View>
-          )}
+          ) : null}
 
-          <Text style={styles.sectionTitle}>Recommandations pour vous</Text>
-          <Text style={styles.sectionSubtitle}>
-            {preferences.length > 0
-              ? "Basees sur vos gouts par l IA"
-              : "Selectionnees par votre IA familiale"}
-          </Text>
+          <Text style={S.section}>RECOMMANDATIONS</Text>
 
           {loadingBooks ? (
             <View style={{ alignItems: "center", paddingVertical: 40 }}>
               <Text style={{ fontSize: 40, marginBottom: 12 }}>🤖</Text>
-              <Text style={{ fontSize: 16, color: "#2A7C6F", fontWeight: "600" }}>
-                L IA cherche des livres pour vous...
-              </Text>
-              <Text style={{ fontSize: 14, color: "#999", marginTop: 6 }}>
-                Cela peut prendre quelques secondes
-              </Text>
+              <Text style={{ fontSize: 16, color: "#2A7C6F", fontWeight: "800" }}>L'IA cherche des livres...</Text>
             </View>
           ) : null}
 
-          {!loadingBooks && aiBooks.length > 0 ? aiBooks.map((book) => renderBookCard(book)) : null}
+          {!loadingBooks && aiBooks.map((b) => <BookCard key={b.id} book={b} />)}
 
-          {!loadingBooks && aiBooks.length === 0 ? (
-            <View style={{ alignItems: "center", paddingVertical: 30 }}>
-              <Text style={{ fontSize: 14, color: "#888", textAlign: "center" }}>
-                Les recommandations arrivent bientot...
-              </Text>
-            </View>
-          ) : null}
-
-          <TouchableOpacity
-            style={[styles.confirmButton, { marginTop: 16 }, loadingBooks && styles.confirmDisabled]}
-            onPress={() => fetchAIRecommendations(preferences)}
-            disabled={loadingBooks}
-          >
-            <Text style={styles.confirmText}>Nouvelles recommandations</Text>
+          <TouchableOpacity style={[S.btn, { marginTop: 16 }, loadingBooks && S.btnOff]} onPress={() => fetchRecos(preferences)} disabled={loadingBooks}>
+            <Text style={S.btnText}>Nouvelles recommandations</Text>
           </TouchableOpacity>
-
-          <View style={styles.aiSuggestion}>
-            <Text style={styles.aiIcon}>🤖</Text>
-            <Text style={styles.aiText}>
-              Chaque livre termine affine vos recommandations.
-              Plus vous lisez, plus l IA vous connait !
-            </Text>
-          </View>
         </ScrollView>
       ) : null}
 
-      {/* ===== LIBRARY TAB ===== */}
-      {activeTab === "library" && (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {reading.length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>📖 En cours de lecture</Text>
-              {reading.map(renderLibraryEntry)}
-            </>
-          )}
-          {toRead.length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>📚 À lire</Text>
-              {toRead.map(renderLibraryEntry)}
-            </>
-          )}
-          {finished.length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>✅ Livres terminés ({finished.length})</Text>
-              {finished.map(renderLibraryEntry)}
-            </>
-          )}
-          {library.length === 0 && (
-            <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>📚</Text>
-              <Text style={styles.emptyTitle}>Votre bibliothèque est vide</Text>
-              <Text style={styles.emptyText}>
-                Explorez l'onglet Découvrir pour ajouter vos premiers livres !
-              </Text>
+      {/* ═══ LIBRARY ═══ */}
+      {activeTab === "library" ? (
+        <ScrollView style={S.scroll} contentContainerStyle={{ padding: 18, paddingBottom: 30 }}>
+          {reading.length > 0 ? <><Text style={S.section}>EN COURS</Text>{reading.map((e) => (
+            <View key={e.id} style={S.book}>
+              <View style={S.bookPlaceholder}><Text style={{ fontSize: 28 }}>📖</Text></View>
+              <View style={S.bookInfo}>
+                <Text style={S.bookTitle}>{e.book.title}</Text>
+                <Text style={S.bookAuthor}>{e.book.author}</Text>
+                <TouchableOpacity style={S.finBtn} onPress={() => startFinish(e)}><Text style={S.finBtnT}>J'ai termine !</Text></TouchableOpacity>
+              </View>
+            </View>
+          ))}</> : null}
+          {toRead.length > 0 ? <><Text style={S.section}>A LIRE</Text>{toRead.map((e) => (
+            <View key={e.id} style={S.book}>
+              <View style={S.bookPlaceholder}><Text style={{ fontSize: 28 }}>📚</Text></View>
+              <View style={S.bookInfo}>
+                <Text style={S.bookTitle}>{e.book.title}</Text>
+                <Text style={S.bookAuthor}>{e.book.author}</Text>
+                <TouchableOpacity style={S.startBtn} onPress={() => startReading(e)}><Text style={S.startBtnT}>Commencer</Text></TouchableOpacity>
+              </View>
+            </View>
+          ))}</> : null}
+          {finished.length > 0 ? <><Text style={S.section}>TERMINES ({finished.length})</Text>{finished.map((e) => (
+            <View key={e.id} style={S.book}>
+              <View style={S.bookPlaceholder}><Text style={{ fontSize: 28 }}>✅</Text></View>
+              <View style={S.bookInfo}>
+                <Text style={S.bookTitle}>{e.book.title}</Text>
+                <Text style={S.bookAuthor}>{e.book.author}</Text>
+              </View>
+            </View>
+          ))}</> : null}
+          {library.length === 0 ? (
+            <View style={{ alignItems: "center", marginTop: 60 }}>
+              <Text style={{ fontSize: 60, marginBottom: 16 }}>📚</Text>
+              <Text style={{ fontSize: 18, fontWeight: "800", color: "#7A6055", marginBottom: 8 }}>Bibliotheque vide</Text>
+              <Text style={{ fontSize: 14, color: "#B0978A", textAlign: "center" }}>Allez dans Decouvrir pour ajouter des livres</Text>
+            </View>
+          ) : null}
+        </ScrollView>
+      ) : null}
+
+      {/* ═══ FAMILY ═══ */}
+      {activeTab === "family" ? (
+        <ScrollView style={S.scroll} contentContainerStyle={{ padding: 18, paddingBottom: 30 }}>
+          <Text style={S.section}>EN CE MOMENT DANS LA FAMILLE</Text>
+          {reading.length > 0 ? reading.map((e) => (
+            <View key={e.id} style={S.famCard}>
+              <Text style={S.famTitle}>{e.book.title}</Text>
+              <Text style={S.famAuthor}>{e.book.author}</Text>
+            </View>
+          )) : (
+            <View style={{ alignItems: "center", marginTop: 60 }}>
+              <Text style={{ fontSize: 60, marginBottom: 16 }}>👨‍👩‍👧‍👦</Text>
+              <Text style={{ fontSize: 14, color: "#B0978A", textAlign: "center", lineHeight: 22 }}>Quand les membres liront, vous verrez ici ce que chacun lit.</Text>
             </View>
           )}
         </ScrollView>
-      )}
+      ) : null}
 
-      {/* ===== FAMILY TAB ===== */}
-      {activeTab === "family" && (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          <Text style={styles.sectionTitle}>👨‍👩‍👧‍👦 En ce moment dans notre famille</Text>
-          {reading.length > 0 ? (
-            <>
-              <Text style={styles.familyReading}>Vous lisez :</Text>
-              {reading.map((entry) => (
-                <View key={entry.id} style={styles.familyCard}>
-                  <Text style={styles.familyBookTitle}>📖 {entry.book.title}</Text>
-                  <Text style={styles.familyBookAuthor}>{entry.book.author}</Text>
-                </View>
-              ))}
-            </>
-          ) : (
-            <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>👨‍👩‍👧‍👦</Text>
-              <Text style={styles.emptyTitle}>Rien pour l'instant</Text>
-              <Text style={styles.emptyText}>
-                Quand les membres de votre famille liront, vous verrez ici ce que chacun lit.
-                {"\n\n"}C'est l'occasion de découvrir, partager et discuter ensemble !
-              </Text>
-            </View>
-          )}
-          <View style={styles.aiSuggestion}>
-            <Text style={styles.aiIcon}>💡</Text>
-            <Text style={styles.aiText}>
-              Quand deux membres lisent le même livre, l'IA vous proposera d'en discuter ensemble !
-            </Text>
-          </View>
-        </ScrollView>
-      )}
-
-      {/* ===== BOOK DETAIL MODAL ===== */}
+      {/* ═══ BOOK DETAIL MODAL ═══ */}
       <Modal visible={!!selectedBook} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            {selectedBook && (
-              <>
-                {selectedBook.coverUrl ? (
-                  <Image source={{ uri: selectedBook.coverUrl }} style={{ width: 120, height: 180, borderRadius: 10, marginBottom: 16 }} />
-                ) : (
-                  <Text style={styles.modalEmoji}>📖</Text>
-                )}
-                <Text style={styles.modalTitle}>{selectedBook.title}</Text>
-                <Text style={styles.modalAuthor}>{selectedBook.author}</Text>
-                <Text style={styles.modalDesc}>{selectedBook.description}</Text>
-                {selectedBook.genre ? <Text style={styles.modalGenre}>Genre : {selectedBook.genre}</Text> : null}
-                <TouchableOpacity style={styles.modalButton} onPress={() => addToLibrary(selectedBook, "reading")}>
-                  <Text style={styles.modalButtonText}>Je le lis !</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.modalButtonOutline} onPress={() => addToLibrary(selectedBook, "to_read")}>
-                  <Text style={styles.modalButtonOutlineText}>A lire plus tard</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: "#FF9900" }]}
-                  onPress={() => openAmazon(selectedBook)}
-                >
-                  <Text style={styles.modalButtonText}>Se le procurer</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.modalCancel} onPress={() => setSelectedBook(null)}>
-                  <Text style={styles.modalCancelText}>Fermer</Text>
-                </TouchableOpacity>
-              </>
-            )}
+        <View style={S.modalBg}>
+          <View style={S.modal}>
+            {selectedBook ? <>
+              {selectedBook.coverUrl ? <Image source={{ uri: selectedBook.coverUrl }} style={{ width: 120, height: 180, borderRadius: 12, marginBottom: 16 }} /> : <Text style={{ fontSize: 48, marginBottom: 12 }}>📖</Text>}
+              <Text style={S.modalTitle}>{selectedBook.title}</Text>
+              <Text style={{ fontSize: 16, color: "#B0978A", marginBottom: 12 }}>{selectedBook.author}</Text>
+              <Text style={{ fontSize: 14, color: "#7A6055", textAlign: "center", lineHeight: 22, marginBottom: 12 }}>{selectedBook.description}</Text>
+              {selectedBook.genre ? <Text style={{ fontSize: 13, color: "#B0978A", marginBottom: 16 }}>Genre : {selectedBook.genre}</Text> : null}
+              <TouchableOpacity style={S.btn} onPress={() => addToLib(selectedBook, "reading")}><Text style={S.btnText}>Je le lis !</Text></TouchableOpacity>
+              <TouchableOpacity style={S.btnOut} onPress={() => addToLib(selectedBook, "to_read")}><Text style={S.btnOutText}>A lire plus tard</Text></TouchableOpacity>
+              <TouchableOpacity style={[S.btn, { backgroundColor: "#C9933A" }]} onPress={() => openAmazon(selectedBook)}><Text style={S.btnText}>Se le procurer</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setSelectedBook(null)} style={{ padding: 14 }}><Text style={{ color: "#B0978A" }}>Fermer</Text></TouchableOpacity>
+            </> : null}
           </View>
         </View>
       </Modal>
 
-      {/* ===== POST-READING FLOW MODAL ===== */}
-      <Modal visible={showFinishModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            {finishingEntry && currentPostQuestion && (
-              <>
-                {/* Progress */}
-                <View style={styles.postProgress}>
-                  {postReadingQuestions.map((_, i) => (
-                    <View key={i} style={[styles.progressDot, i <= postReadingStep && styles.progressDotActive]} />
+      {/* ═══ POST-READING MODAL ═══ */}
+      <Modal visible={showFinish} animationType="slide" transparent>
+        <View style={S.modalBg}>
+          <View style={S.modal}>
+            {finEntry ? <>
+              <Text style={{ fontSize: 48, marginBottom: 8 }}>🎉</Text>
+              <Text style={S.modalTitle}>Bravo !</Text>
+              <Text style={{ fontSize: 14, color: "#7A6055", marginBottom: 16, textAlign: "center" }}>
+                {ageGroup === "child" ? `Super, tu as fini "${finEntry.book.title}" !` : `Vous avez termine "${finEntry.book.title}"`}
+              </Text>
+
+              {/* Child quiz */}
+              {ageGroup === "child" ? (
+                loadingQuiz ? (
+                  <Text style={{ color: "#2A7C6F", fontWeight: "800" }}>L'IA prepare un mini quiz...</Text>
+                ) : childQuiz.length > 0 && childQuizAnswers.length < childQuiz.length ? (
+                  <View style={{ width: "100%" }}>
+                    <Text style={S.qText}>{childQuiz[childQuizAnswers.length].q}</Text>
+                    {childQuiz[childQuizAnswers.length].options.map((o) => (
+                      <OptionCard key={o} label={o} onPress={() => handleChildQuizAnswer(o)} showEmoji />
+                    ))}
+                  </View>
+                ) : null
+              ) : null}
+
+              {/* Teen/Adult post questions */}
+              {ageGroup !== "child" && currentPost ? (
+                <View style={{ width: "100%" }}>
+                  <View style={[S.dots, { marginBottom: 12 }]}>
+                    {postQuestions.map((_, i) => <View key={i} style={[S.dot, i <= postStep && S.dotOn]} />)}
+                  </View>
+                  <Text style={[S.qText, { marginBottom: 12 }]}>{currentPost.question}</Text>
+                  {currentPost.type === "choice" && currentPost.options?.map((o) => (
+                    <OptionCard key={o} label={o} onPress={() => handlePostChoice(o)} />
                   ))}
-                </View>
-
-                <Text style={styles.modalEmoji}>
-                  {postReadingStep === 0 ? "🎉" : "🤖"}
-                </Text>
-
-                {postReadingStep === 0 && (
-                  <Text style={styles.postBravo}>
-                    Bravo ! Vous avez terminé "{finishingEntry.book.title}" !
-                  </Text>
-                )}
-
-                <Text style={styles.postQuestion}>{currentPostQuestion.question}</Text>
-
-                {currentPostQuestion.type === "choice" && currentPostQuestion.options?.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.label}
-                    style={styles.postOptionButton}
-                    onPress={() => handlePostReadingChoice(opt.label)}
-                  >
-                    <Text style={styles.optionEmoji}>{opt.emoji}</Text>
-                    <Text style={styles.optionLabel}>{opt.label}</Text>
-                  </TouchableOpacity>
-                ))}
-
-                {currentPostQuestion.type === "text" && (
-                  <>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="Tapez ici... (optionnel)"
-                      value={postReadingText}
-                      onChangeText={setPostReadingText}
-                      multiline
-                    />
-                    <View style={styles.textActions}>
-                      <TouchableOpacity style={styles.skipButton} onPress={() => {
-                        setPostReadingText("");
-                        if (postReadingStep < postReadingQuestions.length - 1) {
-                          setPostReadingStep((s) => s + 1);
-                        } else {
-                          completeReading(postReadingAnswers);
-                        }
-                      }}>
-                        <Text style={styles.skipText}>Passer</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.confirmButton} onPress={submitPostText}>
-                        <Text style={styles.confirmText}>Valider</Text>
-                      </TouchableOpacity>
+                  {currentPost.type === "text" ? (
+                    <View>
+                      <TextInput style={S.inp} placeholder="Votre reponse..." placeholderTextColor="#B0978A" value={postText} onChangeText={setPostText} multiline />
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 12 }}>
+                        <TouchableOpacity onPress={() => { setPostText(""); if (postStep < postQuestions.length - 1) setPostStep((s) => s + 1); else finishReading(postAnswers); }} style={{ padding: 14 }}>
+                          <Text style={{ color: "#B0978A" }}>Passer</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[S.btn, { flex: 0, paddingHorizontal: 30 }]} onPress={submitPostText}>
+                          <Text style={S.btnText}>Valider</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </>
-                )}
-              </>
-            )}
+                  ) : null}
+                </View>
+              ) : null}
 
-            <TouchableOpacity
-              style={styles.modalCancel}
-              onPress={() => { setShowFinishModal(false); setFinishingEntry(null); }}
-            >
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
+              <TouchableOpacity onPress={() => { setShowFinish(false); setFinEntry(null); }} style={{ padding: 14, marginTop: 8 }}>
+                <Text style={{ color: "#B0978A" }}>Annuler</Text>
+              </TouchableOpacity>
+            </> : null}
           </View>
         </View>
       </Modal>
@@ -860,140 +593,87 @@ export default function Reading() {
   );
 }
 
-const styles = StyleSheet.create({
+// ── Styles ─────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#FBF7F2" },
+  scroll: { flex: 1 },
 
-  // Hero header
-  hero: {
-    backgroundColor: "#2A7C6F",
-    paddingTop: Platform.OS === "ios" ? 14 : 10,
-    paddingBottom: 18,
-    paddingHorizontal: 22,
-    position: "relative",
-    overflow: "hidden",
-  },
-  heroCircle1: { position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: 60, backgroundColor: "rgba(255,255,255,0.06)" },
-  heroCircle2: { position: "absolute", bottom: -20, left: -10, width: 80, height: 80, borderRadius: 40, backgroundColor: "rgba(255,255,255,0.04)" },
+  // Hero
+  hero: { backgroundColor: "#2A7C6F", paddingTop: Platform.OS === "ios" ? 14 : 10, paddingBottom: 18, paddingHorizontal: 22, position: "relative", overflow: "hidden" },
+  c1: { position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: 60, backgroundColor: "rgba(255,255,255,0.06)" },
+  c2: { position: "absolute", bottom: -20, left: -10, width: 80, height: 80, borderRadius: 40, backgroundColor: "rgba(255,255,255,0.04)" },
   heroTitle: { fontSize: 26, fontWeight: "800", color: "#fff", fontStyle: "italic", marginBottom: 4 },
   heroSub: { fontSize: 13, color: "rgba(255,255,255,0.6)", marginBottom: 14 },
 
-  // Pill tabs
-  pillRow: { flexDirection: "row", gap: 8 },
+  pills: { flexDirection: "row", gap: 8 },
   pill: { backgroundColor: "rgba(255,255,255,0.15)", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.15)" },
   pillOn: { backgroundColor: "rgba(255,255,255,0.95)", borderColor: "transparent" },
-  pillText: { fontSize: 13, fontWeight: "700", color: "rgba(255,255,255,0.7)" },
-  pillTextOn: { color: "#2A7C6F" },
+  pillT: { fontSize: 13, fontWeight: "700", color: "rgba(255,255,255,0.7)" },
+  pillTOn: { color: "#2A7C6F" },
 
-  // Content
-  content: { flex: 1, padding: 18 },
-  sectionTitle: { fontSize: 11, fontWeight: "800", color: "#B0978A", marginBottom: 10, letterSpacing: 0.8, textTransform: "uppercase" },
-  sectionSubtitle: { fontSize: 14, color: "#7A6055", marginBottom: 16 },
+  // Progress
+  dots: { flexDirection: "row", justifyContent: "center", marginBottom: 20 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#EDE3D5", marginHorizontal: 4 },
+  dotOn: { backgroundColor: "#2A7C6F", width: 24 },
 
-  // Discovery
-  discoveryContainer: { alignItems: "center", paddingBottom: 40 },
-  discoveryProgress: { flexDirection: "row", justifyContent: "center", marginBottom: 20 },
-  progressDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#EDE3D5", marginHorizontal: 4 },
-  progressDotActive: { backgroundColor: "#2A7C6F", width: 24, borderRadius: 4 },
-  discoveryGreeting: { fontSize: 16, fontWeight: "800", color: "#2A7C6F", textAlign: "center", marginBottom: 4 },
+  greeting: { fontSize: 16, fontWeight: "800", color: "#2A7C6F", textAlign: "center", marginBottom: 16 },
 
-  questionCard: { backgroundColor: "#fff", borderRadius: 24, padding: 22, width: "100%", borderWidth: 1, borderColor: "rgba(107,78,61,0.1)", shadowColor: "rgba(44,31,20,0.08)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 20, elevation: 3 },
-  questionText: { fontSize: 20, fontWeight: "800", color: "#2C1F14", textAlign: "center", marginBottom: 6 },
-  questionSubtitle: { fontSize: 14, color: "#B0978A", textAlign: "center", marginBottom: 20 },
+  // Question card
+  qCard: { backgroundColor: "#fff", borderRadius: 24, padding: 22, width: "100%", borderWidth: 1, borderColor: "rgba(107,78,61,0.1)", shadowColor: "rgba(44,31,20,0.08)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 20, elevation: 3 },
+  qText: { fontSize: 18, fontWeight: "800", color: "#2C1F14", textAlign: "center", marginBottom: 16 },
 
-  optionButton: {
-    flexDirection: "row", alignItems: "center", backgroundColor: "#fff",
-    padding: 16, borderRadius: 18, marginBottom: 10, borderWidth: 2, borderColor: "rgba(107,78,61,0.1)",
-    shadowColor: "rgba(44,31,20,0.08)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 8, elevation: 2,
-  },
-  optionSelected: { borderColor: "#2A7C6F", backgroundColor: "#D0EDE9", shadowColor: "rgba(42,124,111,0.2)", shadowRadius: 16 },
-  optionEmoji: { fontSize: 26, marginRight: 14 },
-  optionLabel: { fontSize: 15, fontWeight: "700", color: "#2C1F14", flex: 1 },
-  optionLabelSelected: { color: "#2A7C6F", fontWeight: "800" },
-  checkMark: { fontSize: 18, color: "#2A7C6F", fontWeight: "bold" },
+  // Options
+  opt: { flexDirection: "row", alignItems: "center", backgroundColor: "#fff", padding: 16, borderRadius: 20, marginBottom: 10, borderWidth: 2, borderColor: "rgba(107,78,61,0.08)", shadowColor: "rgba(44,31,20,0.06)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 12, elevation: 2 },
+  optSel: { borderColor: "#2A7C6F", backgroundColor: "#D0EDE9" },
+  optIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: "#F5EFE6", alignItems: "center", justifyContent: "center", marginRight: 12 },
+  optText: { fontSize: 16, fontWeight: "700", color: "#2C1F14", flex: 1 },
+  optTextSel: { color: "#2A7C6F", fontWeight: "800" },
+  optCheck: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#2A7C6F", alignItems: "center", justifyContent: "center" },
+  optCheckText: { color: "#fff", fontSize: 14, fontWeight: "bold" },
 
-  confirmButton: { backgroundColor: "#2A7C6F", paddingVertical: 16, borderRadius: 18, alignItems: "center", marginTop: 14, shadowColor: "rgba(42,124,111,0.35)", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 20, elevation: 6 },
-  confirmDisabled: { opacity: 0.4 },
-  confirmText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  // Buttons
+  btn: { backgroundColor: "#2A7C6F", paddingVertical: 16, borderRadius: 18, alignItems: "center", width: "100%", marginTop: 10, shadowColor: "rgba(42,124,111,0.35)", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 20, elevation: 6 },
+  btnOff: { opacity: 0.4 },
+  btnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  btnOut: { borderWidth: 2, borderColor: "rgba(107,78,61,0.1)", paddingVertical: 14, borderRadius: 18, width: "100%", alignItems: "center", marginTop: 8, backgroundColor: "#fff" },
+  btnOutText: { color: "#7A6055", fontSize: 16, fontWeight: "700" },
 
-  textInput: { backgroundColor: "#F5EFE6", padding: 16, borderRadius: 16, fontSize: 16, minHeight: 80, textAlignVertical: "top", marginTop: 12, borderWidth: 2, borderColor: "transparent" },
-  textActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 12, gap: 12 },
-  skipButton: { paddingVertical: 14, paddingHorizontal: 20 },
-  skipText: { color: "#999", fontSize: 15 },
+  inp: { backgroundColor: "#F5EFE6", padding: 14, borderRadius: 16, fontSize: 16, minHeight: 70, textAlignVertical: "top" },
 
-  skipAllButton: { marginTop: 20, padding: 12 },
-  skipAllText: { color: "#999", fontSize: 14, textDecorationLine: "underline" },
+  // Section
+  section: { fontSize: 11, fontWeight: "800", color: "#B0978A", letterSpacing: 0.8, marginBottom: 12 },
 
-  // Preferences card
-  prefsCard: { backgroundColor: "#D0EDE9", borderRadius: 16, padding: 18, marginBottom: 20 },
-  prefsTitle: { fontSize: 16, fontWeight: "bold", color: "#2A7C6F", marginBottom: 10 },
-  prefsTags: { flexDirection: "row", flexWrap: "wrap" },
-  prefTag: { backgroundColor: "#fff", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, margin: 3 },
-  prefTagText: { fontSize: 13, color: "#2A7C6F" },
-  reDoText: { color: "#999", fontSize: 13, marginTop: 10, textDecorationLine: "underline" },
+  // Prefs
+  prefsCard: { backgroundColor: "#D0EDE9", borderRadius: 20, padding: 18, marginBottom: 20 },
+  prefsTitle: { fontSize: 15, fontWeight: "800", color: "#2A7C6F", marginBottom: 10 },
+  prefTag: { backgroundColor: "#fff", paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12, margin: 3 },
+  prefTagT: { fontSize: 13, color: "#2A7C6F", fontWeight: "600" },
 
-  // Book Card
-  bookCard: {
-    flexDirection: "row", backgroundColor: "#fff", borderRadius: 24, padding: 16, marginBottom: 12,
-    borderWidth: 1, borderColor: "rgba(107,78,61,0.1)",
-    shadowColor: "rgba(44,31,20,0.08)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 20, elevation: 2,
-  },
-  bookCover: { width: 70, height: 100, backgroundColor: "#F5EFE6", borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 14 },
-  bookCoverImage: { width: 70, height: 100, borderRadius: 10, marginRight: 14 },
-  buyButton: { backgroundColor: "#C9933A", paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12, shadowColor: "rgba(201,147,58,0.3)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 8, elevation: 3 },
-  buyButtonText: { color: "#fff", fontSize: 12, fontWeight: "800" },
-  bookEmoji: { fontSize: 32 },
+  // Book
+  book: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 24, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: "rgba(107,78,61,0.1)", shadowColor: "rgba(44,31,20,0.08)", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 20, elevation: 2 },
+  bookImg: { width: 70, height: 100, borderRadius: 12, marginRight: 14 },
+  bookPlaceholder: { width: 70, height: 100, backgroundColor: "#F5EFE6", borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 14 },
   bookInfo: { flex: 1, justifyContent: "center" },
   bookTitle: { fontSize: 16, fontWeight: "800", color: "#2C1F14", marginBottom: 2 },
-  bookAuthor: { fontSize: 14, color: "#2A7C6F", marginBottom: 6 },
-  bookDesc: { fontSize: 13, color: "#777", lineHeight: 18 },
-  ageBadge: { alignSelf: "flex-start", backgroundColor: "#D0EDE9", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, marginTop: 6 },
-  ageBadgeText: { fontSize: 11, color: "#2A7C6F", fontWeight: "600" },
+  bookAuthor: { fontSize: 14, color: "#2A7C6F", marginBottom: 4 },
+  bookDesc: { fontSize: 13, color: "#7A6055", lineHeight: 18 },
+  badge: { backgroundColor: "#D0EDE9", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10 },
+  badgeText: { fontSize: 11, color: "#2A7C6F", fontWeight: "700" },
+  buyBtn: { backgroundColor: "#C9933A", paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12 },
+  buyText: { color: "#fff", fontSize: 12, fontWeight: "800" },
 
-  ratingText: { fontSize: 13, color: "#2A7C6F", marginTop: 4 },
-
-  finishButton: { backgroundColor: "#2A7C6F", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 16, alignSelf: "flex-start", marginTop: 8 },
-  finishButtonText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-  startButton: { backgroundColor: "#D0EDE9", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 16, alignSelf: "flex-start", marginTop: 8 },
-  startButtonText: { color: "#2A7C6F", fontSize: 13, fontWeight: "600" },
-
-  // AI Suggestion
-  aiSuggestion: { flexDirection: "row", backgroundColor: "#D0EDE9", borderRadius: 16, padding: 16, marginTop: 12, marginBottom: 24, alignItems: "flex-start" },
-  aiIcon: { fontSize: 24, marginRight: 12 },
-  aiText: { flex: 1, fontSize: 14, color: "#555", lineHeight: 20 },
-
-  // Empty
-  empty: { alignItems: "center", marginTop: 60 },
-  emptyIcon: { fontSize: 60, marginBottom: 16 },
-  emptyTitle: { fontSize: 20, fontWeight: "bold", color: "#555", marginBottom: 8 },
-  emptyText: { fontSize: 14, color: "#888", textAlign: "center", lineHeight: 22, paddingHorizontal: 20 },
+  finBtn: { backgroundColor: "#2A7C6F", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 16, alignSelf: "flex-start", marginTop: 8 },
+  finBtnT: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  startBtn: { backgroundColor: "#D0EDE9", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 16, alignSelf: "flex-start", marginTop: 8 },
+  startBtnT: { color: "#2A7C6F", fontSize: 13, fontWeight: "700" },
 
   // Family
-  familyReading: { fontSize: 16, color: "#555", marginTop: 12, marginBottom: 8 },
-  familyCard: { backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: "#2A7C6F" },
-  familyBookTitle: { fontSize: 15, fontWeight: "600", color: "#333" },
-  familyBookAuthor: { fontSize: 13, color: "#888", marginTop: 2 },
+  famCard: { backgroundColor: "#fff", borderRadius: 16, padding: 14, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: "#2A7C6F" },
+  famTitle: { fontSize: 15, fontWeight: "700", color: "#2C1F14" },
+  famAuthor: { fontSize: 13, color: "#B0978A", marginTop: 2 },
 
   // Modal
-  modalOverlay: { flex: 1, backgroundColor: "rgba(44,31,20,0.6)", justifyContent: "flex-end" },
-  modalContent: { backgroundColor: "#FBF7F2", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 26, alignItems: "center", maxHeight: "85%", borderTopWidth: 1, borderTopColor: "rgba(107,78,61,0.1)" },
-  modalEmoji: { fontSize: 48, marginBottom: 12 },
+  modalBg: { flex: 1, backgroundColor: "rgba(44,31,20,0.6)", justifyContent: "flex-end" },
+  modal: { backgroundColor: "#FBF7F2", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 26, alignItems: "center", maxHeight: "85%" },
   modalTitle: { fontSize: 22, fontWeight: "800", color: "#2C1F14", marginBottom: 4 },
-  modalAuthor: { fontSize: 16, color: "#B0978A", marginBottom: 12 },
-  modalDesc: { fontSize: 14, color: "#7A6055", textAlign: "center", lineHeight: 22, marginBottom: 12 },
-  modalGenre: { fontSize: 13, color: "#B0978A", marginBottom: 20 },
-  modalButton: { backgroundColor: "#2A7C6F", paddingVertical: 16, paddingHorizontal: 40, borderRadius: 18, width: "100%", alignItems: "center", marginBottom: 10, shadowColor: "rgba(42,124,111,0.35)", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 20, elevation: 6 },
-  modalButtonText: { color: "#fff", fontSize: 16, fontWeight: "800" },
-  modalButtonOutline: { borderWidth: 2, borderColor: "rgba(107,78,61,0.1)", paddingVertical: 14, paddingHorizontal: 40, borderRadius: 18, width: "100%", alignItems: "center", marginBottom: 10, backgroundColor: "#fff" },
-  modalButtonOutlineText: { color: "#7A6055", fontSize: 16, fontWeight: "700" },
-  modalCancel: { padding: 14 },
-  modalCancelText: { color: "#999", fontSize: 15 },
-
-  // Post-reading
-  postProgress: { flexDirection: "row", justifyContent: "center", marginBottom: 12 },
-  postBravo: { fontSize: 16, color: "#2A7C6F", fontWeight: "600", textAlign: "center", marginBottom: 16 },
-  postQuestion: { fontSize: 18, fontWeight: "bold", color: "#333", textAlign: "center", marginBottom: 16 },
-  postOptionButton: {
-    flexDirection: "row", alignItems: "center", backgroundColor: "#F5EFE6",
-    padding: 14, borderRadius: 14, marginBottom: 8, width: "100%",
-  },
 });

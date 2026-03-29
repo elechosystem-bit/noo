@@ -1,107 +1,93 @@
 import { Tabs } from "expo-router";
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
-import { useRouter } from "expo-router";
 
-function BackButton() {
-  const router = useRouter();
+const TABS = [
+  { name: "feed",       icon: "🏠", label: "Famille"  },
+  { name: "chat",       icon: "💬", label: "Messages" },
+  { name: "reading",    icon: "📚", label: "Lecture"  },
+  { name: "challenges", icon: "🏆", label: "Défis"    },
+  { name: "profile",    icon: "👤", label: "Profil"   },
+];
+
+function CustomTabBar({ state, navigation }: any) {
   return (
-    <TouchableOpacity onPress={() => router.push("/(tabs)/feed")} style={{ paddingLeft: 16, paddingRight: 8 }}>
-      <Text style={{ fontSize: 16, color: "#2A7C6F", fontWeight: "700" }}>← Accueil</Text>
-    </TouchableOpacity>
+    <View style={styles.navWrap}>
+      <View style={styles.nav}>
+        {TABS.map((tab, index) => {
+          const isFocused = state.index === index;
+          return (
+            <TouchableOpacity
+              key={tab.name}
+              style={[styles.ni, isFocused && styles.niOn]}
+              onPress={() => navigation.navigate(tab.name)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.niIcon}>{tab.icon}</Text>
+              <Text style={[styles.niLabel, isFocused && styles.niLabelOn]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
   );
 }
 
 export default function TabLayout() {
   return (
     <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: "#2A7C6F",
-        tabBarInactiveTintColor: "#B0978A",
-        tabBarShowLabel: true,
-        tabBarLabelStyle: {
-          fontSize: 9.5,
-          fontWeight: "800",
-          letterSpacing: 0.5,
-          textTransform: "uppercase",
-          marginTop: 2,
-          marginBottom: Platform.OS === "ios" ? 0 : 6,
-        },
-        tabBarStyle: { display: "none" },
-        headerShown: false,
-      }}
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
     >
-      <Tabs.Screen
-        name="feed"
-        options={{
-          title: "Famille",
-          headerShown: false,
-          tabBarIcon: ({ focused }) => (
-            <View style={[styles.ni, focused && styles.niOn]}>
-              <Text style={styles.niIcon}>🏠</Text>
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="chat"
-        options={{
-          title: "Messages",
-          tabBarIcon: ({ focused }) => (
-            <View style={[styles.ni, focused && styles.niOn]}>
-              <Text style={styles.niIcon}>💬</Text>
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="reading"
-        options={{
-          title: "Lecture",
-          tabBarIcon: ({ focused }) => (
-            <View style={[styles.ni, focused && styles.niOn]}>
-              <Text style={styles.niIcon}>📚</Text>
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="challenges"
-        options={{
-          title: "Defis",
-          tabBarIcon: ({ focused }) => (
-            <View style={[styles.ni, focused && styles.niOn]}>
-              <Text style={styles.niIcon}>🤝</Text>
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: "Profil",
-          tabBarIcon: ({ focused }) => (
-            <View style={[styles.ni, focused && styles.niOn]}>
-              <Text style={styles.niIcon}>👤</Text>
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen name="ai" options={{ href: null, title: "Noo IA" }} />
-      <Tabs.Screen name="gallery" options={{ href: null, title: "Souvenirs" }} />
+      <Tabs.Screen name="feed" />
+      <Tabs.Screen name="chat" />
+      <Tabs.Screen name="reading" />
+      <Tabs.Screen name="challenges" />
+      <Tabs.Screen name="profile" />
+      <Tabs.Screen name="ai"      options={{ href: null }} />
+      <Tabs.Screen name="gallery" options={{ href: null }} />
     </Tabs>
   );
 }
 
 const styles = StyleSheet.create({
+  navWrap: {
+    backgroundColor: "#FBF7F2",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(107,78,61,0.08)",
+    paddingBottom: Platform.OS === "ios" ? 20 : 4,
+    shadowColor: "#2C1F14",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  nav: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-around",
+    paddingTop: 10,
+    paddingHorizontal: 4,
+    height: 60,
+  },
   ni: {
-    paddingHorizontal: 14,
+    flex: 1,
+    alignItems: "center",
+    gap: 3,
     paddingVertical: 6,
+    paddingHorizontal: 4,
     borderRadius: 16,
+    marginHorizontal: 2,
   },
-  niOn: {
-    backgroundColor: "#D0EDE9",
+  niOn: { backgroundColor: "#D0EDE9" },
+  niIcon: { fontSize: 22, lineHeight: 26 },
+  niLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    color: "#C4B0A8",
   },
-  niIcon: {
-    fontSize: 22,
-  },
+  niLabelOn: { color: "#2A7C6F" },
 });
